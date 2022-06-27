@@ -6,21 +6,61 @@
 #include <unistd.h>
 #include <pthread.h>
 #include "util/set.h"
+#include "util/map.h"
+#include "util/queue.h"
 #include "comun.h"
 
-struct clientes
+
+typedef struct cliente
 {
+    const char *uuid;     // UUID
+    int sd;             // socket descriptor ?
+    set *temas;         //topics descriptors to which the client is subcribed
+    queue *eventos;     //envents queued so the client can pull them in order
+} cliente;
 
-};
+typedef struct tema
+{
+    const char *nombre;  //topic's key
+    set *clientes;       //descriptors of the subscribed clients
+} tema;
 
-void revierte(char *b, int t){
-    char aux;
-    for (int i=0; i<t/2; i++) {
-        aux=b[i];
-        b[i]=b[t-i-1];
-        b[t-i-1]=aux;
-    }
-}   
+typedef struct evento
+{
+    const char *tema;   //event's key
+    int value       //value in binary
+}evento;
+
+
+// create clients struct and inserts it into the map
+cliente * crea_cliente(map *mg, const char *uuid, int sd)
+{
+    cliente *c = malloc(sizeof(cliente));
+    c->uuid = uuid;
+    c->sd = sd;
+    c->temas = set_create(0);
+    c->eventos = queue_create(0);
+    map_put(mg, c->uuid, c);
+    return c;
+}
+
+tema * crea_tema(map *mg, const char *nombre)
+{
+    tema * t = malloc(sizeof(tema));
+    t->nombre = nombre;
+    t->clientes = set_create(0);
+    map_put(mg,t->nombre,t);
+    return t;
+}
+
+evento * crea_evento(const char *tema, int value)
+{
+    evento * e = malloc(sizeof(evento));
+    e->tema = tema;
+    e->value = value;
+    return e;
+}
+
 
 void *servicio(void *arg)
 {
@@ -31,11 +71,14 @@ void *servicio(void *arg)
         while (recv(s_srv, &tam, sizeof(tam), MSG_WAITALL)>0)
         {
             printf("recibida petición cliente\n");
+            //guardo tamaño
             int tamn=ntohl(tam);
+            //reservo espacio en memmoria
             char *dato = malloc(tamn);
+            //recibo datos
             recv(s_srv, dato, tamn, MSG_WAITALL);
-            sleep(5); // para probar que servicio no es concurrente
-            revierte(dato, tamn);
+            //trabajo con ellos
+            //los envio
             send(s_srv, dato, tamn, 0);
         }
         close(s_srv);
@@ -46,9 +89,10 @@ int main(int argc, char *argv[])
 {
     int s, s_conec;
     unsigned int tam_dir;
-    struct sockaddr_in dir, dir_cliente;
+    struct sockaddr_in dir_cliente;
     int opcion=1;
-    int operacion;
+    map *mapa_clientes = map_create(key_int,0);
+    map *mapa_temas = map_create(key_string, 0);
     
 
     if(argc!=3)
@@ -56,24 +100,29 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Uso: %s puerto fichero_temas\n", argv[0]);
         return 1;
     }
-    return 0;
 
+    //server socket creation
     if ((s=socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
     {
         perror("error creando socket");
         return 1;
     }
-    /* Para reutilizar puerto inmediatamente */
+    
+    //to set socket options
     if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opcion, sizeof(opcion))<0)
     {
         perror("error en setsockopt");
         return 1;
     }
 
+    //server address 
+    struct sockaddr_in dir;
+    dir.sin_family= AF_INET;
     dir.sin_addr.s_addr=INADDR_ANY;
     dir.sin_port=htons(atoi(argv[1]));
-    dir.sin_family= PF_INET;
+    
 
+    //bind socket to address
     if (bind(s, (struct sockaddr *)&dir, sizeof(dir)) < 0)
     {
         perror("error en bind");
@@ -81,6 +130,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    //listen for connections
     if (listen(s, 5) < 0)
     {
         perror("error en listen");
@@ -88,27 +138,38 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    //thread declaration atributes
     pthread_t thid;
     pthread_attr_t atrib_th;
-    pthread_attr_init(&atrib_th); // evita pthread_join
+    pthread_attr_init(&atrib_th);
     pthread_attr_setdetachstate(&atrib_th, PTHREAD_CREATE_DETACHED);
     while(1)
     {
         tam_dir=sizeof(dir_cliente);
-
-
-        /*ACEPTAMOS CONEXION */
+        //This is where we accept connections and save the descriptor for the new socket created
+        //to send and receive data
         if ((s_conec=accept(s, (struct sockaddr *)&dir_cliente, &tam_dir))<0)
         {
-            perror("error en accept");
+            perror("Error en accept");
             close(s);
             return 1;
         }
 
-        if(recv(s_conec, op_tamC, sizeof(op_tamC),  MSG_WAITALL)>0)
-
+        struct cabecera cab;
+        recv (s_conec, &cab, sizeof(cab), MSG_WAITALL);
+        int tam1=ntohl(cab.long1);
+		int tam2=ntohl(cab.long2);
+        UUID_t* uuid = malloc(tam1+1);
+        int op = malloc(tam2+1);
+        recv(s_conec, uuid, tam1, MSG_WAITALL);
+		recv(s_conec, op, tam2, MSG_WAITALL);
+        printf("uuid: %s op: %d\n", uuid, op);
+        
+        
+        //if(recv(s_conec, op_id, sizeof(op_id),  MSG_WAITALL)>0)
 	    //pthread_create(&thid, &atrib_th, servicio, (void *)(long)s_conec);
     }
+    //when finished close the socket
     close(s);
     return 0;
 }
