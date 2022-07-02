@@ -11,7 +11,7 @@ typedef char UUID_t[UUID_SIZE+1]; // +1 para el nulo del string
 
 typedef enum operation
 {
-    REGISTERCLIENT =0,
+    REGISTERCLIENT =1,
     CLOSECLIENT,
     SUBSCRIBE,
     UNSUBSCRIBE,

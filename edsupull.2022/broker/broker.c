@@ -11,9 +11,10 @@
 #include "comun.h"
 
 
+
 typedef struct cliente
 {
-    const char *uuid;     // UUID
+    UUID_t* uuid;        // UUID
     int sd;             // socket descriptor ?
     set *temas;         //topics descriptors to which the client is subcribed
     queue *eventos;     //envents queued so the client can pull them in order
@@ -33,7 +34,7 @@ typedef struct evento
 
 
 // create clients struct and inserts it into the map
-cliente * crea_cliente(map *mg, const char *uuid, int sd)
+cliente * crea_cliente(map *mg, UUID_t* uuid, int sd)
 {
     cliente *c = malloc(sizeof(cliente));
     c->uuid = uuid;
@@ -62,26 +63,49 @@ evento * crea_evento(const char *tema, int value)
 }
 
 
+map *mapa_clientes;
+map *mapa_temas;
+
+// register a new client into the client's map
+void registerClient(int s_srv)
+{
+    UUID_t uuid;
+    recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL);
+    crea_cliente(mapa_clientes, &uuid, s_srv);
+    printf("El cliente se ha registrado correctamente\n");
+}
+
+// send the number of clients registered in the broker
+void clients(int s_srv)
+{
+    int tam = map_size(mapa_clientes);
+    if(send(s_srv, &tam, sizeof(int), 0) < 0)
+    {
+        perror("Error al enviar el número de clientes");
+    }
+}
+
 void *servicio(void *arg)
 {
-        int s_srv, tam;
-        int op_tamC;
-        s_srv=(long) arg;
-        printf("nuevo cliente\n");
-        while (recv(s_srv, &tam, sizeof(tam), MSG_WAITALL)>0)
+    int s_srv = (long) arg;
+    int op;
+    printf("Thread para el servicio creado\n");
+    
+
+    while(recv(s_srv, &op, sizeof(int), MSG_WAITALL) > 0)
+    {
+        switch (op)
         {
-            printf("recibida petición cliente\n");
-            //guardo tamaño
-            int tamn=ntohl(tam);
-            //reservo espacio en memmoria
-            char *dato = malloc(tamn);
-            //recibo datos
-            recv(s_srv, dato, tamn, MSG_WAITALL);
-            //trabajo con ellos
-            //los envio
-            send(s_srv, dato, tamn, 0);
+        case REGISTERCLIENT:
+            registerClient(s_srv);
+            break;
+        case CLIENTS:
+            clients(s_srv);
+        default:
+            break;
         }
-        close(s_srv);
+    }
+    
 	return NULL;
 }
 
@@ -91,10 +115,10 @@ int main(int argc, char *argv[])
     unsigned int tam_dir;
     struct sockaddr_in dir_cliente;
     int opcion=1;
-    map *mapa_clientes = map_create(key_int,0);
-    map *mapa_temas = map_create(key_string, 0);
+    mapa_clientes = map_create(key_int,0);
+    mapa_temas = map_create(key_string, 0);
     
-
+    printf("inicio\n");
     if(argc!=3)
     {
         fprintf(stderr, "Uso: %s puerto fichero_temas\n", argv[0]);
@@ -123,6 +147,7 @@ int main(int argc, char *argv[])
     
 
     //bind socket to address
+    printf("bind\n");
     if (bind(s, (struct sockaddr *)&dir, sizeof(dir)) < 0)
     {
         perror("error en bind");
@@ -131,6 +156,7 @@ int main(int argc, char *argv[])
     }
 
     //listen for connections
+    printf("listen\n");
     if (listen(s, 5) < 0)
     {
         perror("error en listen");
@@ -148,26 +174,15 @@ int main(int argc, char *argv[])
         tam_dir=sizeof(dir_cliente);
         //This is where we accept connections and save the descriptor for the new socket created
         //to send and receive data
+        printf("Esperando conexion\n");
         if ((s_conec=accept(s, (struct sockaddr *)&dir_cliente, &tam_dir))<0)
         {
             perror("Error en accept");
             close(s);
             return 1;
         }
-
-        struct cabecera cab;
-        recv (s_conec, &cab, sizeof(cab), MSG_WAITALL);
-        int tam1=ntohl(cab.long1);
-		int tam2=ntohl(cab.long2);
-        UUID_t* uuid = malloc(tam1+1);
-        int op = malloc(tam2+1);
-        recv(s_conec, uuid, tam1, MSG_WAITALL);
-		recv(s_conec, op, tam2, MSG_WAITALL);
-        printf("uuid: %s op: %d\n", uuid, op);
-        
-        
-        //if(recv(s_conec, op_id, sizeof(op_id),  MSG_WAITALL)>0)
-	    //pthread_create(&thid, &atrib_th, servicio, (void *)(long)s_conec);
+        printf("Conexion recibida\n");
+	    pthread_create(&thid, &atrib_th, servicio, (void *)(long)s_conec);
     }
     //when finished close the socket
     close(s);

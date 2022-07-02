@@ -71,19 +71,15 @@ int begin_clnt(void){
     }
     
     //sending of operation code and uuid to register client into the system
-    struct cabecera cab;
     int op = REGISTERCLIENT;
-    cab.long1=htonl(strlen(uuid));
-    cab.long2=htonl(sizeof(op));
-    struct iovec iov[3];
-    printf("uuid = %s uuidlen = %d op = %d", uuid,strlen(uuid), op);
-    iov[0].iov_base = &cab;
-    iov[0].iov_len = sizeof(cab);
-    iov[1].iov_base = *uuid;
-    iov[1].iov_len = strlen(*uuid);
-    iov[2].iov_base = op;
-    iov[2].iov_len = sizeof(op);
-    if(writev(s,iov, 3) < 0)
+    printf("uuid: %s op: %c\n", uuid, &op);
+    struct iovec iov[2];
+    iov[0].iov_base=&op;
+    iov[0].iov_len=sizeof(int);
+    iov[1].iov_base=&uuid;
+    iov[1].iov_len=sizeof(UUID_t);
+    
+    if(writev(s,iov, 2) < 0)
     {
         perror("Error en writev");
         close(s);
@@ -114,7 +110,18 @@ int topics(){ // cuántos temas existen en el sistema
     return 0;
 }
 int clients(){ // cuántos clientes existen en el sistema
-    return 0;
+    int op = CLIENTS;
+    if(send(s, &op, sizeof(int), 0) < 0)
+    {
+        perror("Error al enviar el codigo de operación");
+    }
+    int res;
+    if(recv(s, &res, sizeof(int), MSG_WAITALL) > 0)
+    {
+        perror("Error al recibir el número de clientes");
+        return -1;
+    }
+    return res;
 }
 int subscribers(const char *tema){ // cuántos subscriptores tiene este tema
     return 0;
