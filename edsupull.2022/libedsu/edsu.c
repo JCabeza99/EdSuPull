@@ -72,7 +72,6 @@ int begin_clnt(void){
     
     //sending of operation code and uuid to register client into the system
     int op = REGISTERCLIENT;
-    printf("uuid: %s op: %c\n", uuid, &op);
     struct iovec iov[2];
     iov[0].iov_base=&op;
     iov[0].iov_len=sizeof(int);
@@ -116,7 +115,7 @@ int clients(){ // cuántos clientes existen en el sistema
         perror("Error al enviar el codigo de operación");
     }
     int res;
-    if(recv(s, &res, sizeof(int), MSG_WAITALL) > 0)
+    if(recv(s, &res, sizeof(int), MSG_WAITALL) < 0)
     {
         perror("Error al recibir el número de clientes");
         return -1;

@@ -89,7 +89,6 @@ void *servicio(void *arg)
 {
     int s_srv = (long) arg;
     int op;
-    printf("Thread para el servicio creado\n");
     
 
     while(recv(s_srv, &op, sizeof(int), MSG_WAITALL) > 0)
@@ -118,7 +117,6 @@ int main(int argc, char *argv[])
     mapa_clientes = map_create(key_int,0);
     mapa_temas = map_create(key_string, 0);
     
-    printf("inicio\n");
     if(argc!=3)
     {
         fprintf(stderr, "Uso: %s puerto fichero_temas\n", argv[0]);
@@ -147,7 +145,6 @@ int main(int argc, char *argv[])
     
 
     //bind socket to address
-    printf("bind\n");
     if (bind(s, (struct sockaddr *)&dir, sizeof(dir)) < 0)
     {
         perror("error en bind");
@@ -155,8 +152,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    //listen for connections
-    printf("listen\n");
+    //listen for connections 
     if (listen(s, 5) < 0)
     {
         perror("error en listen");
@@ -174,7 +170,6 @@ int main(int argc, char *argv[])
         tam_dir=sizeof(dir_cliente);
         //This is where we accept connections and save the descriptor for the new socket created
         //to send and receive data
-        printf("Esperando conexion\n");
         if ((s_conec=accept(s, (struct sockaddr *)&dir_cliente, &tam_dir))<0)
         {
             perror("Error en accept");
