@@ -12,63 +12,61 @@
 
 
 
-typedef struct cliente
+typedef struct client
 {
     UUID_t uuid;        // UUID
     int sd;             // socket descriptor ?
-    set *temas;         //topics descriptors to which the client is subcribed
-    queue *eventos;     //envents queued so the client can pull them in order
-} cliente;
+    set *topics;         //topics descriptors to which the client is subcribed
+    queue *events;     //envents queued so the client can pull them in order
+} client;
 
-typedef struct tema
+typedef struct topic
 {
     const char *nombre;  //topic's key
-    set *clientes;       //descriptors of the subscribed clients
-} tema;
+    set *clients;       //descriptors of the subscribed clients
+} topic;
 
-typedef struct evento
+typedef struct event
 {
-    const char *tema;   //event's key
-    int value       //value in binary
-}evento;
+    const char *topic;   //event's key
+    const void *value;  //value of the event
+    int queue;          //number of clients queues awaiting for get op
+    
+}event;
 
 
 // create clients struct and inserts it into the map
-cliente * crea_cliente(map *mg, UUID_t uuidI, int sd)
+client * create_client(map *mg, UUID_t uuidI, int sd)
 {
-    cliente *c = malloc(sizeof(cliente));
+    client *c = malloc(sizeof(client));
     strcpy(c->uuid,uuidI);
     c->sd = sd;
-    c->temas = set_create(0);
-    c->eventos = queue_create(0);
+    c->topics = set_create(0);
+    c->events = queue_create(0);
     map_put(mg, c->uuid, c);
     return c;
 }
 
-tema * crea_tema(map *mg, const char *nombre)
+topic * create_topic(map *mg, const char *nombre)
 {
-    tema * t = malloc(sizeof(tema));
+    topic * t = malloc(sizeof(topic));
     t->nombre = nombre;
-    t->clientes = set_create(0);
+    t->clients = set_create(0);
     map_put(mg,t->nombre,t);
     return t;
 }
 
-evento * crea_evento(const char *tema, int value)
+event * create_event(const char *topic, const void *value)
 {
-    evento * e = malloc(sizeof(evento));
-    e->tema = tema;
+    event * e = malloc(sizeof(event));
+    e->topic = topic;
     e->value = value;
+    e->queue = 0;
     return e;
 }
 
-void imprime_persona(void *c, void *v) {
-    struct cliente *p = v;
-    printf("nombre %s edad %s\n", (char *)c, p->uuid);
-}
-
-map *mapa_clientes;
-map *mapa_temas;
+map *clients_map;
+map *topics_map;
 
 // register a new client into the client's map
 void registerClient(int s_srv)
@@ -77,13 +75,13 @@ void registerClient(int s_srv)
     
     if(recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL) < 0)
     {
-        perror("Error al recibir el uuid del cliente\n");
+        perror("Error al recibir el uuid del client\n");
     }
-    crea_cliente(mapa_clientes, uuid, s_srv);
+    create_client(clients_map, uuid, s_srv);
     int res = 0;
     if(send(s_srv, &res, sizeof(int), 0) < 0)
     {
-        perror("Error al enviar la respuesta al cliente\n");
+        perror("Error al enviar la respuesta al client\n");
     }
 }
 
@@ -92,41 +90,38 @@ void subscribeToTopic(int s_srv)
 {
     UUID_t uuid;
     int len;
-    char *temaId;
+    char *topicId;
 
     if(recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL) < 0)
     {
-        perror("Error al recibir el uuid del cliente\n");
+        perror("Error al recibir el uuid del client\n");
     }
 
     if(recv(s_srv, &len, sizeof(int), MSG_WAITALL) < 0 )
     {
-        perror("Error al recibir la longitud del tema\n");
+        perror("Error al recibir la longitud del topic\n");
     }
 
     len = ntohl(len);
-    temaId = malloc(len+1);
+    topicId = malloc(len+1);
 
-    if(recv(s_srv, temaId, len, MSG_WAITALL) < 0)
+    if(recv(s_srv, topicId, len, MSG_WAITALL) < 0)
     {
-        perror("Error al recibir el uuid del cliente\n");
+        perror("Error al recibir el uuid del client\n");
     }
 
-    temaId[len]='\0';
+    topicId[len]='\0';
     int res = 0;
     int getC;
     int getT;
-    cliente * c;
-    tema * t;
+    client * c;
+    topic * t;
 
-    printf("cliente: %s \ntema: %s \n", uuid, temaId);
+    c = map_get(clients_map, uuid, &getC);
+    t = map_get(topics_map, topicId, &getT);
 
-    c = map_get(mapa_clientes, uuid, &getC);
-    t = map_get(mapa_temas, temaId, &getT);
-
-    printf("getC: %d getT: %d\n" ,getC, getT);
     
-    if(getC == -1 || getT == -1 || set_add(c->temas, t) == -1 || set_add(t->clientes, c) == -1)
+    if(getC == -1 || getT == -1 || set_add(c->topics, t) == -1 || set_add(t->clients, c) == -1)
     {
         res = -1; 
     }
@@ -134,20 +129,68 @@ void subscribeToTopic(int s_srv)
 
     if(send(s_srv, &res, sizeof(int), 0) < 0)
     {
-        perror("Error al enviar la respuesta al cliente\n");
+        perror("Error al enviar la respuesta al client\n");
     }
 }
 
 //publish an event and queue it to the subscibed clients
-void publish(s_srv)
+void publish(int s_srv)
 {
     
+    struct cabecera cab;
+    char *topicId;
+    void *eventId;
+
+    if(recv(s_srv, &cab, sizeof(cab), MSG_WAITALL) < 0 )
+    {
+        perror("Error al recibir la cabecera\n");
+    }
+
+    int tam1 = ntohl(cab.long1);
+    int tam2 = ntohl(cab.long2);
+    topicId = malloc(tam1+1);
+    eventId = malloc(tam2+1);
+
+    if(recv(s_srv, topicId, tam1, MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el topic\n");
+    }
+    if(recv(s_srv, eventId, tam2, MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el event\n");
+    }
+    topicId[tam1] = '\0';
+    int getT;
+    int res = 0;
+    topic *t = map_get(topics_map, topicId, &getT);
+    event *e = create_event(topicId,eventId);
+
+    if(getT != -1)
+    {
+        set_iter *it = set_iter_init(t->clients);
+        while(set_iter_has_next(it))
+        {
+            client *c = set_iter_value(it);
+            queue_push_back(c->events, e);
+            e->value++;
+            set_iter_next(it);
+        }
+    }
+    else
+    {
+        res = -1;
+    }
+    
+    if(send(s_srv, &res, sizeof(int), 0) < 0)
+    {
+        perror("Error al enviar la respuesta al client\n");
+    }
 }
 
 // send the number of clients registered in the broker
 void clients(int s_srv)
 {
-    int tam = map_size(mapa_clientes);
+    int tam = map_size(clients_map);
     if(send(s_srv, &tam, sizeof(int), 0) < 0)
     {
         perror("Error al enviar el número de clientes\n");
@@ -157,10 +200,10 @@ void clients(int s_srv)
 // send the number of topics stored in the broker
 void topics(int s_srv)
 {
-    int tam = map_size(mapa_temas);
+    int tam = map_size(topics_map);
     if(send(s_srv, &tam, sizeof(int), 0) < 0)
     {
-        perror("Error al enviar el número de temas\n");
+        perror("Error al enviar el número de topics\n");
     }
 }
 
@@ -168,42 +211,89 @@ void topics(int s_srv)
 void subscibers(int s_srv)
 {
     int len;
-    char *temaId;
+    char *topicId;
     
     
     if(recv(s_srv, &len, sizeof(int), MSG_WAITALL) < 0 )
     {
-        perror("Error al recibir la longitud del tema\n");
+        perror("Error al recibir la longitud del topic\n");
     }
 
     len = ntohl(len);
-    temaId = malloc(len+1);
+    topicId = malloc(len+1);
 
-    if(recv(s_srv, temaId, len, MSG_WAITALL) < 0)
+    if(recv(s_srv, topicId, len, MSG_WAITALL) < 0)
     {
-        perror("Error al recibir el uuid del cliente\n");
+        perror("Error al recibir el uuid del client\n");
     }
 
-    temaId[len]='\0';
+    topicId[len]='\0';
     int res = 0;
     int getT;
-    tema * t;
+    topic * t;
 
-    t = map_get(mapa_temas, temaId, &getT);
+    t = map_get(topics_map, topicId, &getT);
     if( getT == -1)
     {
         res = -1; 
     }
     else
     {
-        res=set_size(t->clientes);
+        res=set_size(t->clients);
     }
     
     if(send(s_srv, &res, sizeof(int), 0) < 0)
     {
-        perror("Error al enviar la respuesta al cliente\n");
+        perror("Error al enviar la respuesta al client\n");
     }
 
+}
+
+// send the number of events waiting for pull
+void events(int s_srv)
+{
+    UUID_t uuid;
+
+    if(recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el uuid del client\n");
+    }
+
+    int getC;
+    client *c;
+    int res;
+
+    c = map_get(clients_map, uuid, &getC);
+    if(getC == -1)
+    {
+        res = -1;
+    }
+    else
+    {
+        res = queue_length(c->events);   
+    }
+    if(send(s_srv, &res, sizeof(int), 0) < 0)
+    {
+        perror("Error al enviar el número de clientes\n");
+    }
+}
+
+// send the first event in the client's queue
+void get(int s_srv)
+{
+    UUID_t uuid;
+    
+    if(recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el uuid del client\n");
+    }
+    int getC;
+    int getE;
+    client *c = map_get(clients_map, uuid, &getC);
+    event *e = queue_pop_front(c->events,&getE);
+    struct cabecera cab;
+    cab.long1;
+    
 }
 
 // gives service to the client
@@ -233,6 +323,13 @@ void *service(void *arg)
             break;
         case PUBLISH:
             publish(s_srv);
+            break;
+        case EVENTS:
+            events(s_srv);
+            break;
+        case GET:
+            get(s_srv);
+            break;
         default:
             break;
         }
@@ -241,16 +338,16 @@ void *service(void *arg)
 	return NULL;
 }
 
-// read topics from ftemas
+// read topics from ftopics
 void readTopicsfile()
 {
     FILE *s;
-    char *tema;
-    s = fopen("ftemas","r");
+    char *topic;
+    s = fopen("ftopics","r");
     while (1)
     {
-        fscanf(s,"%ms", &tema);
-        crea_tema(mapa_temas,tema);
+        fscanf(s,"%ms", &topic);
+        create_topic(topics_map,topic);
         if(feof(s))
             break;
     }
@@ -263,12 +360,12 @@ int main(int argc, char *argv[])
     unsigned int tam_dir;
     struct sockaddr_in dir_cliente;
     int opcion=1;
-    mapa_clientes = map_create(key_string,0);
-    mapa_temas = map_create(key_string, 0);
+    clients_map = map_create(key_string,0);
+    topics_map = map_create(key_string, 0);
     
     if(argc!=3)
     {
-        fprintf(stderr, "Uso: %s puerto fichero_temas\n", argv[0]);
+        fprintf(stderr, "Uso: %s puerto fichero_topics\n", argv[0]);
         return 1;
     }
 

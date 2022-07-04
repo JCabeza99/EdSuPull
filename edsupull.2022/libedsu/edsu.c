@@ -162,6 +162,16 @@ int publish(const char *tema, const void *evento, uint32_t tam_evento){
     return 0;
 }
 int get(char **tema, void **evento, uint32_t *tam_evento){
+    int op = GET;
+    struct iovec iov[2];
+    iov[0].iov_base=&op;
+    iov[0].iov_len=sizeof(int);
+    iov[1].iov_base=&uuid;
+    iov[1].iov_len=sizeof(UUID_t);
+    if (writev(s, iov, 2)<0)
+    {
+        perror("Error en writev");
+    }
     return 0;
 }
 
@@ -223,5 +233,24 @@ int subscribers(const char *tema){ // cuántos subscriptores tiene este tema
     return res;
 }
 int events() { // nº eventos pendientes de recoger por este cliente
-    return 0;
+    int op = EVENTS;
+    struct iovec iov[2];
+    iov[0].iov_base=&op;
+    iov[0].iov_len=sizeof(int);
+    iov[1].iov_base=&uuid;
+    iov[1].iov_len=sizeof(UUID_t);
+    
+    if(writev(s,iov, 2) < 0)
+    {
+        perror("Error en writev");
+        close(s);
+        return 1;
+    }
+    int res;
+    if(recv(s, &res, sizeof(int), MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir eventos");
+        return -1;
+    }
+    return res;
 }
