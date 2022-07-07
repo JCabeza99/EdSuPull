@@ -30,17 +30,20 @@ typedef struct event
 {
     const char *topic;   //event's key
     const void *value;  //value of the event
+    uint32_t tam_evento;
     int queue;          //number of clients queues awaiting for get op
     
 }event;
 
+
+map *clients_map;
+map *topics_map;
 
 // create clients struct and inserts it into the map
 client * create_client(map *mg, UUID_t uuidI, int sd)
 {
     client *c = malloc(sizeof(client));
     strcpy(c->uuid,uuidI);
-    c->sd = sd;
     c->topics = set_create(0);
     c->events = queue_create(0);
     map_put(mg, c->uuid, c);
@@ -56,17 +59,46 @@ topic * create_topic(map *mg, const char *nombre)
     return t;
 }
 
-event * create_event(const char *topic, const void *value)
+event * create_event(const char *topic, const void *value, uint32_t tam)
 {
     event * e = malloc(sizeof(event));
     e->topic = topic;
     e->value = value;
+    e->tam_evento = tam;
     e->queue = 0;
     return e;
 }
 
-map *clients_map;
-map *topics_map;
+void decreaseCount(void *a)
+{
+    event * e = a;
+    e->queue--;
+    if(e->queue == 0)
+    {
+        free(e);
+    }
+}
+
+int destroyClient(client *c)
+{
+    int res = 0;
+    set_iter *it = set_iter_init(c->topics);
+    while(set_iter_has_next(it))
+    {
+        topic *t = set_iter_value(it);
+        set_remove(t->clients,c,NULL);
+        set_iter_next(it);
+    }
+    res = map_remove_entry(clients_map,c->uuid, NULL);
+    res =set_destroy(c->topics, NULL);
+    res =queue_destroy(c->events,decreaseCount);
+    return res;
+    
+}
+
+
+
+
 
 // register a new client into the client's map
 void registerClient(int s_srv)
@@ -163,16 +195,16 @@ void publish(int s_srv)
     int getT;
     int res = 0;
     topic *t = map_get(topics_map, topicId, &getT);
-    event *e = create_event(topicId,eventId);
+    event *e = create_event(topicId,eventId, tam2);
 
-    if(getT != -1)
+    if(getT == 0)
     {
         set_iter *it = set_iter_init(t->clients);
         while(set_iter_has_next(it))
         {
             client *c = set_iter_value(it);
             queue_push_back(c->events, e);
-            e->value++;
+            e->queue++;
             set_iter_next(it);
         }
     }
@@ -185,6 +217,126 @@ void publish(int s_srv)
     {
         perror("Error al enviar la respuesta al client\n");
     }
+}
+
+// send the first event in the client's queue
+void get(int s_srv)
+{
+    UUID_t uuid;
+    
+    if(recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el uuid del client\n");
+    }
+    int getC;
+    int getE;
+    client *c = map_get(clients_map, uuid, &getC);
+    event *e = queue_pop_front(c->events,&getE);
+    if(getC != -1 && getE != -1)
+    {
+        e->queue--;
+        struct cabecera cab;
+        cab.long1 = htonl(strlen(e->topic));
+        cab.long2 = htonl(e->tam_evento);
+        struct iovec iov[3];
+        iov[0].iov_base=&cab;
+        iov[0].iov_len=sizeof(cab);
+        iov[1].iov_base=e->topic;
+        iov[1].iov_len=strlen(e->topic);
+        iov[2].iov_base=e->value;
+        iov[2].iov_len=e->tam_evento;
+        if (writev(s_srv, iov, 3)<0)
+        {
+            perror("error al escribir los datos para la subscripcion");
+        }
+        if(e->queue == 0)
+        {
+            free(e);
+        }
+    }
+    
+}
+
+//unsubscribes the client from the incoming topic
+
+void unsubscribeFromTopic(int s_srv)
+{
+    UUID_t uuid;
+    int len;
+    char *topicId;
+
+    if(recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el uuid del client\n");
+    }
+
+    if(recv(s_srv, &len, sizeof(int), MSG_WAITALL) < 0 )
+    {
+        perror("Error al recibir la longitud del topic\n");
+    }
+
+    len = ntohl(len);
+    topicId = malloc(len+1);
+
+    if(recv(s_srv, topicId, len, MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el uuid del client\n");
+    }
+
+    topicId[len]='\0';
+    int res = 0;
+    int getC;
+    int getT;
+    client * c;
+    topic * t;
+
+    c = map_get(clients_map, uuid, &getC);
+    t = map_get(topics_map, topicId, &getT);
+
+    
+    if(getC == -1 || getT == -1 || set_remove(c->topics, t, NULL) == -1 || set_remove(t->clients, c, NULL) == -1)
+    {
+        res = -1; 
+    }
+
+    if(send(s_srv, &res, sizeof(int), 0) < 0)
+    {
+        perror("Error al enviar la respuesta al client\n");
+    }
+}
+
+//deregisters client from broker and erases it descriptor
+void closeClient(int s_srv)
+{
+    UUID_t uuid;
+    
+    if(recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el uuid del client\n");
+    }
+    int res = 0;
+    int getC;
+    client * c;
+
+    c = map_get(clients_map, uuid, &getC);
+    if(getC != -1)
+    {
+       res = destroyClient(c);
+       if(res = 0)
+       {
+           free(c);
+       }
+    }
+    else{
+        res = -1;
+    }
+
+    if(send(s_srv, &res, sizeof(int), 0) < 0)
+    {
+        perror("Error al enviar la respuesta al client\n");
+    }
+    close(s_srv);
+
 }
 
 // send the number of clients registered in the broker
@@ -278,23 +430,7 @@ void events(int s_srv)
     }
 }
 
-// send the first event in the client's queue
-void get(int s_srv)
-{
-    UUID_t uuid;
-    
-    if(recv(s_srv, uuid, sizeof(UUID_t), MSG_WAITALL) < 0)
-    {
-        perror("Error al recibir el uuid del client\n");
-    }
-    int getC;
-    int getE;
-    client *c = map_get(clients_map, uuid, &getC);
-    event *e = queue_pop_front(c->events,&getE);
-    struct cabecera cab;
-    cab.long1;
-    
-}
+
 
 // gives service to the client
 void *service(void *arg)
@@ -330,6 +466,11 @@ void *service(void *arg)
         case GET:
             get(s_srv);
             break;
+        case UNSUBSCRIBE:
+            unsubscribeFromTopic(s_srv);
+            break;
+        case CLOSECLIENT:
+            closeClient(s_srv);
         default:
             break;
         }
@@ -339,19 +480,17 @@ void *service(void *arg)
 }
 
 // read topics from ftopics
-void readTopicsfile()
+void readTopicsfile(char *file)
 {
     FILE *s;
     char *topic;
-    s = fopen("ftopics","r");
-    while (1)
+    s = fopen(file,"r");
+    while (!feof(s))
     {
         fscanf(s,"%ms", &topic);
         create_topic(topics_map,topic);
-        if(feof(s))
-            break;
     }
-    
+    fclose(s);
 }
 
 int main(int argc, char *argv[])
@@ -369,7 +508,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    readTopicsfile();
+    readTopicsfile(argv[2]);
 
     //server socket creation
     if ((s=socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)

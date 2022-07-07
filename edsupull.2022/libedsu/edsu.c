@@ -60,6 +60,7 @@ int begin_clnt(void){
     if((s = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
     {
         perror("Error creando socket");
+        close(s);
         return -1;
     }
 
@@ -68,6 +69,7 @@ int begin_clnt(void){
     if(connect(s,(struct sockaddr *)&dir, sizeof(dir)) < 0)
     {
         perror("Error al hacer la conexion");
+        close(s);
         return -1;
     }
     
@@ -83,22 +85,80 @@ int begin_clnt(void){
     {
         perror("Error en writev");
         close(s);
-        return 1;
+        return -1;
     }
     int res;
 
     if(recv(s,&res,sizeof(int), MSG_WAITALL) <0)
     {
         perror("Error al recibir respuesta del broker");
+        close(s);
+        return -1;
     }
-
+    if(res == 0)
+    {
+        printf("Conexion realizada");
+    }
     return res;
 }
 int end_clnt(void){
-    return 0;
+    int op = CLOSECLIENT;
+    struct iovec iov[2];
+    iov[0].iov_base=&op;
+    iov[0].iov_len=sizeof(int);
+    iov[1].iov_base=&uuid;
+    iov[1].iov_len=sizeof(UUID_t);
+
+    if(writev(s,iov, 2) < 0)
+    {
+        perror("Error en writev");
+        close(s);
+        return -1;
+    }
+
+    int res;
+    if(recv(s,&res,sizeof(int), MSG_WAITALL) <0)
+    {
+        perror("Error al recibir respuesta del broker");
+        close(s);
+        return -1;
+    }
+    close(s);
+    printf("Conexion finalizada\n");
+    return res;
 }
 int subscribe(const char *tema){
     int op = SUBSCRIBE;
+    int long1 = htonl(strlen(tema));
+    struct iovec iov[4];
+    iov[0].iov_base=&op;
+    iov[0].iov_len=sizeof(int);
+    iov[1].iov_base=&uuid;
+    iov[1].iov_len=sizeof(UUID_t);
+    iov[2].iov_base=&long1;
+    iov[2].iov_len=sizeof(int);
+    iov[3].iov_base=tema;
+    iov[3].iov_len=strlen(tema);
+    if (writev(s, iov, 4)<0)
+    {
+        perror("error al escribir los datos para la subscripcion");
+        return -1;
+    }
+    int res;
+
+    if(recv(s,&res,sizeof(int), MSG_WAITALL) <0)
+    {
+        perror("Error al recibir respuesta del broker");
+        return -1;
+    }
+    if(res == -1)
+    {
+        fprintf(stderr, "Alguno de los datos introducidos es erroneo\n");
+    }
+    return res;
+}
+int unsubscribe(const char *tema){
+    int op = UNSUBSCRIBE;
     int long1 = htonl(strlen(tema));
     struct iovec iov[4];
     iov[0].iov_base=&op;
@@ -119,17 +179,20 @@ int subscribe(const char *tema){
     if(recv(s,&res,sizeof(int), MSG_WAITALL) <0)
     {
         perror("Error al recibir respuesta del broker");
+        return -1;
     }
     if(res == -1)
     {
         fprintf(stderr, "Alguno de los datos introducidos es erroneo\n");
     }
     return res;
-}
-int unsubscribe(const char *tema){
     return 0;
 }
 int publish(const char *tema, const void *evento, uint32_t tam_evento){
+    if(tam_evento == 0)
+    {
+        return 0;
+    }
     int op = PUBLISH;
     struct cabecera cab;
     cab.long1 = htonl(strlen(tema));
@@ -159,7 +222,6 @@ int publish(const char *tema, const void *evento, uint32_t tam_evento){
         fprintf(stderr, "Alguno de los datos introducidos es erroneo\n");
     }
     return res;
-    return 0;
 }
 int get(char **tema, void **evento, uint32_t *tam_evento){
     int op = GET;
@@ -172,6 +234,32 @@ int get(char **tema, void **evento, uint32_t *tam_evento){
     {
         perror("Error en writev");
     }
+    struct cabecera cab;
+    char *topicId;
+    void *eventId;    
+    if(recv(s, &cab, sizeof(cab), MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir eventos");
+        return -1;
+    }
+    int tam1 = ntohl(cab.long1);
+    int tam2 = ntohl(cab.long2);
+    topicId = malloc(tam1+1);
+    eventId = malloc(tam2+1);
+    if(recv(s, topicId, tam1, MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el topic\n");
+        return -1;
+    }
+    topicId[tam1]='\0';
+    if(recv(s, eventId, tam2, MSG_WAITALL) < 0)
+    {
+        perror("Error al recibir el event\n");
+        return -1;
+    }
+    *evento = eventId;
+    *tema = topicId;
+    *tam_evento = tam2;
     return 0;
 }
 
@@ -218,13 +306,14 @@ int subscribers(const char *tema){ // cuántos subscriptores tiene este tema
     if (writev(s, iov, 3)<0)
     {
         perror("error al escribir los datos para la subscripcion");
-        return 1;
+        return -1;
     }
     int res;
     
     if(recv(s,&res,sizeof(int), MSG_WAITALL) <0)
     {
         perror("Error al recibir respuesta del broker");
+        return -1;
     }
     if(res < 0)
     {
@@ -244,7 +333,7 @@ int events() { // nº eventos pendientes de recoger por este cliente
     {
         perror("Error en writev");
         close(s);
-        return 1;
+        return -1;
     }
     int res;
     if(recv(s, &res, sizeof(int), MSG_WAITALL) < 0)
